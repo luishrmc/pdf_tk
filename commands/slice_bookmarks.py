@@ -7,31 +7,105 @@ from utils.pdf_utils import ensure_output_dir, validate_pdf_path, sanitize_filen
 logger = setup_logger(__name__)
 
 
-def get_bookmarks(reader: PdfReader) -> list[dict]:
+def get_bookmark_tree(reader: PdfReader) -> list[dict]:
     """
-    Recursively traverses the PDF outline (bookmarks) and returns a flat list
-    of dicts with keys: title, page (0-indexed), level.
-    """
-    bookmarks = []
+    Parses the PDF outline into a tree structure.
 
-    def traverse(outline, level=0):
-        for item in outline:
+    Each node has:
+      - title
+      - page   (0-indexed)
+      - level
+      - children
+    """
+    def parse(items, level=0):
+        nodes = []
+        last_node = None
+
+        for item in items:
             if isinstance(item, Destination):
                 page_num = reader.get_destination_page_number(item)
                 logger.debug(
                     f"[slice-bookmarks]   Found bookmark — level={level}, "
-                    f"page={page_num + 1}, title='{item.title}'"
+                    f"page={page_num + 1}, title='{item.title}'" # type: ignore
                 )
-                bookmarks.append({
+                node = {
                     "title": item.title,
                     "page": page_num,
                     "level": level,
-                })
-            elif isinstance(item, list):
-                traverse(item, level + 1)
+                    "children": [],
+                }
+                nodes.append(node)
+                last_node = node
 
-    traverse(reader.outline)
-    return bookmarks
+            elif isinstance(item, list):
+                children = parse(item, level + 1)
+
+                # In a normal PDF outline, the nested list belongs to the
+                # immediately previous destination.
+                if last_node is not None:
+                    last_node["children"].extend(children) # type: ignore
+                else:
+                    # Fallback for malformed outlines
+                    nodes.extend(children)
+
+        return nodes
+
+    return parse(reader.outline)
+
+
+def collect_nodes_at_level(tree: list[dict], target_level: int) -> list[dict]:
+    """
+    Returns all bookmark nodes at the requested nesting level, preserving
+    document order.
+    """
+    result = []
+
+    def walk(nodes):
+        for node in nodes:
+            if node["level"] == target_level:
+                result.append(node)
+            walk(node["children"])
+
+    walk(tree)
+    return result
+
+
+def add_outline_subtree(
+    writer: PdfWriter,
+    node: dict,
+    chapter_start: int,
+    chapter_end: int,
+    parent=None,
+):
+    """
+    Rebuilds the bookmark subtree inside the sliced PDF.
+
+    chapter_start/chapter_end are source-document page bounds.
+    The output bookmark page is remapped relative to chapter_start.
+    """
+    page = node["page"]
+
+    # Ignore bookmarks outside the extracted page interval
+    if not (chapter_start <= page < chapter_end):
+        return None
+
+    local_page = page - chapter_start
+    outline_ref = writer.add_outline_item(
+        title=node["title"],
+        page_number=local_page,
+        parent=parent,
+    )
+
+    for child in node["children"]:
+        add_outline_subtree(
+            writer=writer,
+            node=child,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+            parent=outline_ref,
+        )
+
+    return outline_ref
 
 
 def run(document: str, output_dir: str, level: int = 0):
@@ -39,10 +113,8 @@ def run(document: str, output_dir: str, level: int = 0):
     Slices a PDF into multiple files based on its bookmarks/outline at a
     given nesting level, saving one PDF per chapter/section.
 
-    Args:
-        document   : Path to the source PDF.
-        output_dir : Directory where chapter PDFs will be saved.
-        level      : Bookmark nesting level to slice by (0 = top-level).
+    Each output file preserves the internal bookmark subtree of the sliced
+    chapter/section.
     """
     logger.info("[slice-bookmarks] Starting bookmark-based slice operation.")
 
@@ -56,28 +128,25 @@ def run(document: str, output_dir: str, level: int = 0):
     total_pages = len(reader.pages)
     logger.info(f"[slice-bookmarks] Document has {total_pages} page(s).")
 
-    # --- Extract bookmarks ---
+    # --- Extract bookmark tree ---
     logger.info("[slice-bookmarks] Traversing document outline (bookmarks)...")
-    all_bookmarks = get_bookmarks(reader)
+    bookmark_tree = get_bookmark_tree(reader)
 
-    if not all_bookmarks:
+    if not bookmark_tree:
         logger.error("[slice-bookmarks] No bookmarks/outline found in this document. Aborting.")
         raise RuntimeError("The document has no bookmarks/outline to slice by.")
 
-    logger.info(f"[slice-bookmarks] Total bookmarks found (all levels): {len(all_bookmarks)}.")
-
-    # --- Filter target level ---
-    chapters = [b for b in all_bookmarks if b["level"] == level]
+    chapters = collect_nodes_at_level(bookmark_tree, level)
 
     if not chapters:
-        available_levels = sorted(set(b["level"] for b in all_bookmarks))
+        available_levels = sorted({
+            node["level"]
+            for node in collect_nodes_at_level(bookmark_tree, 0)
+        })
         logger.error(
-            f"[slice-bookmarks] No bookmarks found at level {level}. "
-            f"Available levels: {available_levels}."
+            f"[slice-bookmarks] No bookmarks found at level {level}."
         )
-        raise ValueError(
-            f"No bookmarks at level {level}. Try one of: {available_levels}."
-        )
+        raise ValueError(f"No bookmarks at level {level}.")
 
     logger.info(f"[slice-bookmarks] Chapters found at level {level}: {len(chapters)}.")
     for i, ch in enumerate(chapters):
@@ -87,7 +156,7 @@ def run(document: str, output_dir: str, level: int = 0):
     logger.info("[slice-bookmarks] Starting chapter extraction...")
 
     for i, chapter in enumerate(chapters):
-        start = chapter["page"]  # 0-indexed
+        start = chapter["page"]
         end = chapters[i + 1]["page"] if i < len(chapters) - 1 else total_pages
         page_count = end - start
 
@@ -97,9 +166,19 @@ def run(document: str, output_dir: str, level: int = 0):
         )
 
         writer = PdfWriter()
+
+        # Copy pages
         for page_num in range(start, end):
             logger.debug(f"[slice-bookmarks]   Adding page {page_num + 1}.")
             writer.add_page(reader.pages[page_num])
+
+        # Rebuild internal bookmarks for this sliced chapter
+        add_outline_subtree(
+            writer=writer,
+            node=chapter,
+            chapter_start=start,
+            chapter_end=end,
+        )
 
         safe_title = sanitize_filename(chapter["title"])
         output_filename = f"{i+1:02d}_{safe_title}.pdf"
