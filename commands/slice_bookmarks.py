@@ -24,10 +24,16 @@ def get_bookmark_tree(reader: PdfReader) -> list[dict]:
         for item in items:
             if isinstance(item, Destination):
                 page_num = reader.get_destination_page_number(item)
-                logger.debug(
-                    f"[slice-bookmarks]   Found bookmark — level={level}, "
-                    f"page={page_num + 1}, title='{item.title}'" # type: ignore
-                )
+                if page_num is None:
+                    logger.warning(
+                        "[slice-bookmarks]   Bookmark without page destination "
+                        f"at level={level}: title='{item.title}'."
+                    )
+                else:
+                    logger.debug(
+                        f"[slice-bookmarks]   Found bookmark — level={level}, "
+                        f"page={page_num + 1}, title='{item.title}'" # type: ignore
+                    )
                 node = {
                     "title": item.title,
                     "page": page_num,
@@ -62,7 +68,7 @@ def collect_nodes_at_level(tree: list[dict], target_level: int) -> list[dict]:
 
     def walk(nodes):
         for node in nodes:
-            if node["level"] == target_level:
+            if node["level"] == target_level and node["page"] is not None:
                 result.append(node)
             walk(node["children"])
 
@@ -84,6 +90,11 @@ def add_outline_subtree(
     The output bookmark page is remapped relative to chapter_start.
     """
     page = node["page"]
+
+    # Some outlines contain container bookmarks with no destination page.
+    # They should not be added as bookmarks in the sliced PDF.
+    if page is None:
+        return None
 
     # Ignore bookmarks outside the extracted page interval
     if not (chapter_start <= page < chapter_end):

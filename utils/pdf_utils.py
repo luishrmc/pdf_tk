@@ -33,6 +33,14 @@ def sanitize_filename(name: str) -> str:
     Removes characters that are invalid in filenames across major OS platforms
     and trims leading/trailing whitespace.
     """
-    sanitized = re.sub(r'[\\/:*?"<>|]', "_", name).strip()
+    # Remove control characters (including NUL) and characters invalid on
+    # common filesystems.
+    sanitized = re.sub(r"[\x00-\x1F\x7F]", "", name)
+    sanitized = re.sub(r'[\\/:*?"<>|]', "_", sanitized).strip()
+
+    # Avoid empty or reserved-looking names after sanitization.
+    if not sanitized:
+        sanitized = "untitled"
+
     logger.debug(f"[pdf_utils] Sanitized filename: '{name}' → '{sanitized}'")
     return sanitized
