@@ -12,10 +12,16 @@ from pypdf.generic import Destination
 
 from core.bookmarker import add_bookmarks_to_pdf
 from core.domain_models import BookmarkNode, BookmarkTree
+from core.inserter import insert_pdf_pages
 from core.slicer import slice_pdf_by_bookmarks, slice_pdf_by_range
 from core.stream_manager import copy_stream, rewind_stream
 
-from .adapters import load_bookmark_tree, to_slice_range
+from .adapters import (
+    load_bookmark_tree,
+    to_insert_index,
+    to_slice_range,
+    to_source_range,
+)
 
 
 def slice_range_to_file(
@@ -89,14 +95,10 @@ def _bookmark_tree_from_pdf(source: BytesIO) -> BookmarkTree:
                 page_number = reader.get_destination_page_number(item)
                 if page_number is None or not isinstance(item.title, str):
                     continue
-                nodes.append(
-                    BookmarkNode(title=item.title, page_number=page_number)
-                )
+                nodes.append(BookmarkNode(title=item.title, page_number=page_number))
             elif isinstance(item, list) and nodes:
                 parent = nodes[-1]
-                nodes[-1] = parent.model_copy(
-                    update={"children": parse_outline(item)}
-                )
+                nodes[-1] = parent.model_copy(update={"children": parse_outline(item)})
         return tuple(nodes)
 
     return BookmarkTree(roots=parse_outline(reader.outline))
@@ -142,3 +144,33 @@ def slice_bookmarks_to_directory(
 ) -> None:
     """Compatibility wrapper for the original controller name."""
     slice_bookmarks_controller(input_file, output_directory)
+
+
+def insert_pages_controller(
+    target_file: Path,
+    source_file: Path,
+    output_file: Path,
+    insertion_position: int,
+    *,
+    source_start_page: int | None = None,
+    source_end_page: int | None = None,
+) -> None:
+    """Insert source PDF pages into a target PDF using CLI page numbers.
+
+    This controller owns physical file access. Human-facing page positions are
+    converted to strictly 0-based core indices before calling the inserter.
+    """
+    target = _read_pdf_stream(target_file)
+    source = _read_pdf_stream(source_file)
+    insertion_index = to_insert_index(insertion_position)
+    source_range = to_source_range(source_start_page, source_end_page)
+    result = insert_pdf_pages(
+        target,
+        source,
+        insertion_index,
+        source_range=source_range,
+    )
+
+    rewind_stream(result)
+    with output_file.open("wb") as destination:
+        copy_stream(result, destination)

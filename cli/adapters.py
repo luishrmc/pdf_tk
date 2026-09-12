@@ -30,6 +30,31 @@ def to_slice_range(start_page: int, end_page: int) -> SliceRange:
     )
 
 
+def to_insert_index(insertion_position: int) -> int:
+    """Convert a 1-based insertion position to a 0-based core index."""
+    if (
+        not isinstance(insertion_position, int)
+        or isinstance(insertion_position, bool)
+        or insertion_position < 1
+    ):
+        raise ValueError("insertion_position must be at least 1")
+    return insertion_position - 1
+
+
+def to_source_range(
+    start_page: int | None,
+    end_page: int | None,
+) -> SliceRange | None:
+    """Convert optional inclusive 1-based source pages to a core range."""
+    if start_page is None and end_page is None:
+        return None
+    if start_page is None or end_page is None:
+        raise ValueError(
+            "source_start_page and source_end_page must be provided together"
+        )
+    return to_slice_range(start_page, end_page)
+
+
 def _parse_bookmark_node(
     payload: Any,
     *,

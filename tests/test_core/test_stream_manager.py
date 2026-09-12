@@ -24,7 +24,7 @@ def test_open_pdf_input_bytes_io_rewinds_without_closing_stream() -> None:
     assert not source.closed
 
 
-def test_open_pdf_output_bytes_io_truncates_and_rewinds_without_closing_stream() -> None:
+def test_open_pdf_output_bytes_io_truncates_and_rewinds() -> None:
     target = BytesIO(b"old data")
 
     with open_pdf_output(target) as stream:

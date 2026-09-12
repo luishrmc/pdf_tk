@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
-from cli.controllers import slice_range_to_file
+from cli.controllers import insert_pages_controller, slice_range_to_file
 from core.domain_models import BookmarkNode, BookmarkTree, SliceRange
 
 
@@ -79,13 +79,16 @@ def test_slice_bookmarks_controller_writes_each_core_section(
         "Section 2": BytesIO(b"section two"),
     }
 
-    with patch(
-        "cli.controllers._bookmark_tree_from_pdf",
-        return_value=bookmark_tree,
-    ), patch(
-        "cli.controllers.slice_pdf_by_bookmarks",
-        return_value=sections,
-    ) as slice_bookmarks:
+    with (
+        patch(
+            "cli.controllers._bookmark_tree_from_pdf",
+            return_value=bookmark_tree,
+        ),
+        patch(
+            "cli.controllers.slice_pdf_by_bookmarks",
+            return_value=sections,
+        ) as slice_bookmarks,
+    ):
         from cli.controllers import slice_bookmarks_controller
 
         slice_bookmarks_controller(input_file, output_directory)
@@ -97,3 +100,40 @@ def test_slice_bookmarks_controller_writes_each_core_section(
     assert passed_tree == bookmark_tree
     assert (output_directory / "01_Chapter_1.pdf").read_bytes() == b"chapter one"
     assert (output_directory / "02_Section_2.pdf").read_bytes() == b"section two"
+
+
+def test_insert_pages_controller_routes_streams_and_zero_based_arguments(
+    tmp_path: Path,
+) -> None:
+    target_file = tmp_path / "target.pdf"
+    source_file = tmp_path / "source.pdf"
+    output_file = tmp_path / "output.pdf"
+    target_file.write_bytes(b"target PDF bytes")
+    source_file.write_bytes(b"source PDF bytes")
+    inserted_stream = BytesIO(b"inserted PDF bytes")
+
+    with patch(
+        "cli.controllers.insert_pdf_pages",
+        return_value=inserted_stream,
+    ) as insert_pages:
+        insert_pages_controller(
+            target_file=target_file,
+            source_file=source_file,
+            output_file=output_file,
+            insertion_position=2,
+            source_start_page=3,
+            source_end_page=5,
+        )
+
+    insert_pages.assert_called_once()
+    target_stream, source_stream, insertion_index = insert_pages.call_args.args
+    assert isinstance(target_stream, BytesIO)
+    assert isinstance(source_stream, BytesIO)
+    assert target_stream.getvalue() == b"target PDF bytes"
+    assert source_stream.getvalue() == b"source PDF bytes"
+    assert insertion_index == 1
+    assert insert_pages.call_args.kwargs["source_range"] == SliceRange(
+        start_page=2,
+        end_page=4,
+    )
+    assert output_file.read_bytes() == b"inserted PDF bytes"

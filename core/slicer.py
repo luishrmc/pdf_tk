@@ -50,6 +50,7 @@ def slice_pdf_by_range(
     output_stream.seek(0)
     return output_stream
 
+
 def flatten_bookmark_tree(
     bookmarks: BookmarkTree,
     *,

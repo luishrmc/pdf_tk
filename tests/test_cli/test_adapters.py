@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from cli.adapters import load_bookmark_tree, to_slice_range
+from cli.adapters import (
+    load_bookmark_tree,
+    to_insert_index,
+    to_slice_range,
+    to_source_range,
+)
+from core.domain_models import SliceRange
 
 
 def test_to_slice_range_converts_one_based_pages_to_zero_based_range() -> None:
@@ -25,6 +32,29 @@ def test_to_slice_range_rejects_invalid_human_page_ranges(
 ) -> None:
     with pytest.raises(ValueError):
         to_slice_range(start_page=start_page, end_page=end_page)
+
+
+def test_to_insert_index_converts_one_based_position_to_zero_based_index() -> None:
+    assert to_insert_index(1) == 0
+    assert to_insert_index(4) == 3
+
+
+@pytest.mark.parametrize("insertion_position", [0, -1, "1", True])
+def test_to_insert_index_rejects_invalid_positions(
+    insertion_position: object,
+) -> None:
+    with pytest.raises(ValueError):
+        to_insert_index(cast(int, insertion_position))
+
+
+def test_to_source_range_converts_optional_one_based_pages() -> None:
+    assert to_source_range(2, 4) == SliceRange(start_page=1, end_page=3)
+    assert to_source_range(None, None) is None
+
+
+def test_to_source_range_requires_both_boundaries() -> None:
+    with pytest.raises(ValueError):
+        to_source_range(2, None)
 
 
 def test_load_bookmark_tree_converts_json_pages_to_zero_based_model(
@@ -88,8 +118,7 @@ def test_load_bookmark_tree_rejects_invalid_bookmark_values(
 def test_load_bookmark_tree_skips_page_less_outline_labels(tmp_path: Path) -> None:
     bookmarks_file = tmp_path / "bookmarks.json"
     bookmarks_file.write_text(
-        '[{"title": "Chapter 1", "page": 1}, '
-        '{"title": "Label without destination"}]',
+        '[{"title": "Chapter 1", "page": 1}, {"title": "Label without destination"}]',
         encoding="utf-8",
     )
 

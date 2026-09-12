@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, Iterator, TypeAlias
+from typing import BinaryIO
 
-
-PdfStreamSource: TypeAlias = Path | BytesIO
-PdfStreamTarget: TypeAlias = Path | BytesIO
+type PdfStreamSource = Path | BytesIO
+type PdfStreamTarget = Path | BytesIO
 
 
 @contextmanager

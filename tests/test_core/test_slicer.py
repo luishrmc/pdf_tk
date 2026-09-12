@@ -112,9 +112,7 @@ def test_slice_pdf_by_bookmarks_preserves_remapped_internal_hierarchy(
                     BookmarkNode(
                         title="Section 1.2",
                         page_number=3,
-                        children=(
-                            BookmarkNode(title="Section 1.2.1", page_number=3),
-                        ),
+                        children=(BookmarkNode(title="Section 1.2.1", page_number=3),),
                     ),
                 ),
             ),

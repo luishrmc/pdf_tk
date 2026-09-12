@@ -22,12 +22,14 @@ packages = ["core", "cli"]
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0"
 ]
 
 [tool.mypy]
 strict = true
+explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -36,6 +38,7 @@ disallow_incomplete_defs = true
 [tool.ruff]
 line-length = 88
 target-version = "py314"
+exclude = ["_legacy", ".mypy_cache", ".pytest_cache", ".ruff_cache"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

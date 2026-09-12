@@ -5,25 +5,23 @@ from pathlib import Path
 import pytest
 from pypdf import PdfReader, PdfWriter
 
-click = pytest.importorskip("click")
-from click.testing import CliRunner
-
 from cli.parser import main
 
 
 def create_synthetic_pdf(path: Path, *, page_count: int) -> None:
     """Create a temporary blank PDF with a deterministic page count."""
-    with path.open("wb") as output:
-        with PdfWriter() as writer:
-            for _ in range(page_count):
-                writer.add_blank_page(width=72, height=72)
-            writer.write(output)
+    with path.open("wb") as output, PdfWriter() as writer:
+        for _ in range(page_count):
+            writer.add_blank_page(width=72, height=72)
+        writer.write(output)
 
 
 def invoke_cli(arguments: list[str]):
     """Invoke the Click-based CLI used by the Markdown E2E surface."""
     if not hasattr(main, "name"):
         pytest.skip("Markdown E2E requires the Click-based CLI entry point")
+    from click.testing import CliRunner
+
     return CliRunner().invoke(main, arguments)
 
 
