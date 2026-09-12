@@ -5,8 +5,12 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class PDFIndexOutOfBoundsError(ValueError):
+    """Raised when a 0-based PDF page index is outside a document."""
+
+
 class BookmarkNode(BaseModel):
-    """Immutable PDF bookmark node with a 0-based destination page index."""
+    """Immutable hierarchical bookmark with a strictly 0-based page number."""
 
     model_config = ConfigDict(
         frozen=True,
@@ -15,12 +19,12 @@ class BookmarkNode(BaseModel):
     )
 
     title: str = Field(min_length=1)
-    page_index: int = Field(ge=0)
+    page_number: int = Field(ge=0)
     children: tuple[BookmarkNode, ...] = ()
 
     
 class BookmarkTree(BaseModel):
-    """Immutable PDF bookmark tree whose destination indices are 0-based."""
+    """Immutable PDF bookmark tree whose page numbers are strictly 0-based."""
 
     model_config = ConfigDict(
         frozen=True,
@@ -50,6 +54,17 @@ class SliceRange(BaseModel):
             raise ValueError("end_page must be greater than or equal to start_page")
         return self
 
+class BookmarkSection(BaseModel):
+    """A flattened bookmark section with a strictly 0-based page range."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        strict=True,
+    )
+
+    title: str = Field(min_length=1)
+    page_range: SliceRange
 
 class InsertOperation(BaseModel):
     """PDF insertion request with a strictly 0-based insertion index."""
