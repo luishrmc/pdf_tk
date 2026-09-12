@@ -99,6 +99,48 @@ def test_slice_pdf_by_bookmarks_splits_at_next_top_level_bookmark(
     assert len(PdfReader(result["Chapter 2"]).pages) == 2
 
 
+def test_slice_pdf_by_bookmarks_preserves_remapped_internal_hierarchy(
+    five_page_pdf: BytesIO,
+) -> None:
+    bookmarks = BookmarkTree(
+        roots=(
+            BookmarkNode(
+                title="Chapter 1",
+                page_number=1,
+                children=(
+                    BookmarkNode(title="Section 1.1", page_number=2),
+                    BookmarkNode(
+                        title="Section 1.2",
+                        page_number=3,
+                        children=(
+                            BookmarkNode(title="Section 1.2.1", page_number=3),
+                        ),
+                    ),
+                ),
+            ),
+            BookmarkNode(title="Chapter 2", page_number=4),
+        )
+    )
+
+    result = slice_pdf_by_bookmarks(five_page_pdf, bookmarks)
+    reader = PdfReader(result["Chapter 1"])
+    outline = reader.outline
+
+    assert isinstance(outline[0], Destination)
+    assert isinstance(outline[1], list)
+    assert outline[0].title == "Chapter 1"
+    assert reader.get_destination_page_number(outline[0]) == 0
+    assert isinstance(outline[1][0], Destination)
+    assert outline[1][0].title == "Section 1.1"
+    assert reader.get_destination_page_number(outline[1][0]) == 1
+    assert isinstance(outline[1][1], Destination)
+    assert outline[1][1].title == "Section 1.2"
+    assert isinstance(outline[1][2], list)
+    assert isinstance(outline[1][2][0], Destination)
+    assert outline[1][2][0].title == "Section 1.2.1"
+    assert reader.get_destination_page_number(outline[1][2][0]) == 2
+
+
 def test_slice_pdf_by_bookmarks_accepts_pdf_with_existing_nested_outline(
     pdf_with_bookmarks: BytesIO,
 ) -> None:
@@ -122,7 +164,7 @@ def test_slice_pdf_by_bookmarks_rejects_empty_bookmark_tree(
         slice_pdf_by_bookmarks(five_page_pdf, BookmarkTree())
 
 
-def test_slice_pdf_by_bookmarks_rejects_same_page_bookmarks(
+def test_slice_pdf_by_bookmarks_coalesces_same_page_bookmarks(
     five_page_pdf: BytesIO,
 ) -> None:
     bookmarks = BookmarkTree(
@@ -132,8 +174,30 @@ def test_slice_pdf_by_bookmarks_rejects_same_page_bookmarks(
         )
     )
 
-    with pytest.raises(ValueError, match="end_page"):
-        slice_pdf_by_bookmarks(five_page_pdf, bookmarks)
+    result = slice_pdf_by_bookmarks(five_page_pdf, bookmarks)
+
+    assert set(result) == {"First"}
+    assert len(PdfReader(result["First"]).pages) == 4
+
+
+def test_slice_pdf_by_bookmarks_can_slice_nested_hierarchy_level(
+    five_page_pdf: BytesIO,
+) -> None:
+    bookmarks = BookmarkTree(
+        roots=(
+            BookmarkNode(
+                title="Chapter 1",
+                page_number=0,
+                children=(BookmarkNode(title="Section 1", page_number=2),),
+            ),
+            BookmarkNode(title="Chapter 2", page_number=4),
+        )
+    )
+
+    result = slice_pdf_by_bookmarks(five_page_pdf, bookmarks, level=1)
+
+    assert set(result) == {"Section 1"}
+    assert len(PdfReader(result["Section 1"]).pages) == 3
 
 
 def test_slice_pdf_by_bookmarks_handles_bookmark_on_final_page(

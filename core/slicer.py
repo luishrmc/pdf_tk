@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import IndirectObject, TreeObject
 
 from .domain_models import (
     BookmarkNode,
@@ -14,6 +15,7 @@ from .domain_models import (
 from .stream_manager import PdfStreamSource, open_pdf_input
 
 type BookmarkSlices = dict[str, BytesIO]
+type OutlineParent = TreeObject | IndirectObject | None
 
 
 def slice_pdf_by_range(
@@ -50,35 +52,86 @@ def slice_pdf_by_range(
 
 def flatten_bookmark_tree(
     bookmarks: BookmarkTree,
+    *,
+    level: int | None = None,
 ) -> tuple[BookmarkSection, ...]:
     """Flatten bookmark hierarchy into document-order bookmark entries.
 
     All bookmark page numbers remain strictly 0-based. Parent and descendant
     bookmarks are emitted in recursive document order.
     """
+    if level is not None and level < 0:
+        raise ValueError("bookmark level must be non-negative")
+
     sections: list[BookmarkSection] = []
 
-    def visit(nodes: tuple[BookmarkNode, ...]) -> None:
+    def visit(nodes: tuple[BookmarkNode, ...], current_level: int) -> None:
         for node in nodes:
-            sections.append(
-                BookmarkSection(
-                    title=node.title,
-                    page_range=SliceRange(
-                        start_page=node.page_number,
-                        end_page=node.page_number,
-                    ),
+            if level is None or current_level == level:
+                sections.append(
+                    BookmarkSection(
+                        title=node.title,
+                        page_range=SliceRange(
+                            start_page=node.page_number,
+                            end_page=node.page_number,
+                        ),
+                    )
                 )
-            )
-            visit(node.children)
+            visit(node.children, current_level + 1)
 
-    visit(bookmarks.roots)
+    visit(bookmarks.roots, 0)
     return tuple(sections)
+
+
+def _bookmark_nodes_at_level(
+    bookmarks: BookmarkTree,
+    level: int,
+) -> tuple[BookmarkNode, ...]:
+    """Return bookmark nodes at one hierarchy level in document order."""
+    nodes: list[BookmarkNode] = []
+
+    def visit(current: tuple[BookmarkNode, ...], current_level: int) -> None:
+        for node in current:
+            if current_level == level:
+                nodes.append(node)
+            visit(node.children, current_level + 1)
+
+    visit(bookmarks.roots, 0)
+    return tuple(nodes)
+
+
+def _add_outline_subtree(
+    writer: PdfWriter,
+    node: BookmarkNode,
+    *,
+    section_start: int,
+    section_end: int,
+    parent: OutlineParent = None,
+) -> None:
+    """Copy a bookmark subtree with destinations remapped to a slice."""
+    if not section_start <= node.page_number <= section_end:
+        return
+
+    outline_item = writer.add_outline_item(
+        title=node.title,
+        page_number=node.page_number - section_start,
+        parent=parent,
+    )
+    for child in node.children:
+        _add_outline_subtree(
+            writer,
+            child,
+            section_start=section_start,
+            section_end=section_end,
+            parent=outline_item,
+        )
 
 
 def resolve_bookmark_ranges(
     bookmarks: BookmarkTree,
     *,
     total_pages: int,
+    level: int = 0,
 ) -> tuple[BookmarkSection, ...]:
     """Resolve flattened bookmarks into inclusive, strictly 0-based ranges.
 
@@ -95,7 +148,7 @@ def resolve_bookmark_ranges(
     if total_pages <= 0:
         raise ValueError("cannot resolve bookmark ranges for an empty document")
 
-    flattened = flatten_bookmark_tree(bookmarks)
+    flattened = flatten_bookmark_tree(bookmarks, level=level)
     if not flattened:
         raise ValueError("cannot slice a document without bookmarks")
 
@@ -113,21 +166,23 @@ def resolve_bookmark_ranges(
             )
 
     resolved: list[BookmarkSection] = []
-    for index, section in enumerate(flattened):
+    previous_start: int | None = None
+    for section in flattened:
         start_page = section.page_range.start_page
-        if index:
-            previous_start = flattened[index - 1].page_range.start_page
-            if start_page <= previous_start:
-                raise ValueError(
-                    "bookmark page numbers must be strictly increasing in "
-                    "document order"
-                )
+        if previous_start is not None and start_page < previous_start:
+            raise ValueError(
+                "bookmark page numbers must be non-decreasing in document order"
+            )
+        if previous_start == start_page:
+            continue
 
-        next_start = (
-            flattened[index + 1].page_range.start_page
-            if index + 1 < len(flattened)
-            else total_pages
-        )
+        next_start = total_pages
+        for candidate in flattened:
+            candidate_start = candidate.page_range.start_page
+            if candidate_start > start_page:
+                next_start = candidate_start
+                break
+
         resolved.append(
             BookmarkSection(
                 title=section.title,
@@ -137,6 +192,7 @@ def resolve_bookmark_ranges(
                 ),
             )
         )
+        previous_start = start_page
 
     return tuple(resolved)
 
@@ -144,6 +200,8 @@ def resolve_bookmark_ranges(
 def slice_pdf_by_bookmarks(
     source: BytesIO,
     bookmarks: BookmarkTree,
+    *,
+    level: int = 0,
 ) -> BookmarkSlices:
     """Return one in-memory PDF stream for each bookmark-defined section.
 
@@ -162,7 +220,11 @@ def slice_pdf_by_bookmarks(
     sections = resolve_bookmark_ranges(
         bookmarks,
         total_pages=len(reader.pages),
+        level=level,
     )
+    section_nodes = {
+        node.title: node for node in _bookmark_nodes_at_level(bookmarks, level)
+    }
 
     sliced: BookmarkSlices = {}
     for section in sections:
@@ -173,6 +235,12 @@ def slice_pdf_by_bookmarks(
                 section.page_range.end_page + 1,
             ):
                 writer.add_page(reader.pages[page_number])
+            _add_outline_subtree(
+                writer,
+                section_nodes[section.title],
+                section_start=section.page_range.start_page,
+                section_end=section.page_range.end_page,
+            )
             writer.write(output)
         output.seek(0)
         sliced[section.title] = output
